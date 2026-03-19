@@ -1,0 +1,7 @@
+langchain
+pydantic
+streamlit
+beautifulsoup4
+requests
+sqlite-utils
+langchain_google_genai
