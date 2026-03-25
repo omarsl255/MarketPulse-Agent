@@ -1,0 +1,29 @@
+[
+  {
+    "case_id": "dev_api_001",
+    "signal_type": "developer_api",
+    "competitor": "Siemens",
+    "source_url": "https://developer.siemens.com/news",
+    "input_text": "Siemens today announced version 2.0 of the Xcelerator Developer API, featuring new endpoints for Edge Device Management and cloud-to-edge deployment synchronization. A new Python SDK was also released on PyPI under the package name siemens-xcelerator-sdk.",
+    "expected_events": [
+      {
+        "event_type": "API_VERSION_BUMP",
+        "title": "Xcelerator Developer API v2.0 released"
+      },
+      {
+        "event_type": "SDK_RELEASE",
+        "title": "Python SDK for Xcelerator released on PyPI"
+      }
+    ],
+    "tags": ["golden", "extraction", "developer_api"]
+  },
+  {
+    "case_id": "dev_api_002",
+    "signal_type": "developer_api",
+    "competitor": "Schneider Electric",
+    "source_url": "https://developer.se.com/",
+    "input_text": "Welcome to the Schneider Electric Developer Portal. Browse our APIs, SDKs, and documentation to integrate with EcoStruxure platform services.",
+    "expected_events": [],
+    "tags": ["golden", "empty_expected", "developer_api"]
+  }
+]

@@ -1,6 +1,7 @@
 """
 scheduler.py — Runs the intelligence pipeline on a configurable schedule.
 Uses APScheduler for recurring execution.
+V3: passes trigger='scheduler' to run_pipeline for run metadata.
 """
 
 import logging
@@ -26,22 +27,20 @@ def start_scheduler():
 
     scheduler = BlockingScheduler()
 
-    # Run immediately on start, then every `interval` hours
-    logger.info(f"Running initial pipeline execution...")
+    logger.info("Running initial pipeline execution...")
     try:
-        run_pipeline()
+        run_pipeline(trigger="scheduler")
     except Exception as e:
         logger.error(f"Initial run failed: {e}")
 
     scheduler.add_job(
-        run_pipeline,
+        lambda: run_pipeline(trigger="scheduler"),
         "interval",
         hours=interval,
         id="intel_pipeline",
         name=f"Intelligence Pipeline (every {interval}h)",
     )
 
-    # Graceful shutdown
     def shutdown(signum, frame):
         logger.info("Shutdown signal received — stopping scheduler...")
         scheduler.shutdown(wait=False)

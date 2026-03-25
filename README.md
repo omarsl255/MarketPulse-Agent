@@ -1,61 +1,78 @@
-# 📡 Competitor Early-Warning Intelligence Agent — V2
+# RivalSense — Competitor Early-Warning Intelligence Agent (V3)
 
 A multi-competitor analytics agent that proactively monitors industrial automation rivals (Siemens, Schneider Electric, Rockwell Automation) by analyzing unconventional "weak signals" on the web — beyond press releases and business reports.
 
 > **Perspective:** ABB  
 > **Targets:** Siemens, Schneider Electric, Rockwell Automation  
 > **LLM Backend:** Google Gemini (`gemini-2.5-flash`)  
-> **Version:** 0.3.0 (`V2` prototype)
+> **Version:** 0.4.0 (`V3`)
 
 ---
 
-## Current Project Status: ✅ V2 Working Prototype
+## Current Project Status: V3 Working Prototype
 
-This repository is currently a working **internal prototype** of the multi-competitor intelligence pipeline. The core end-to-end flow is implemented and wired together, but signal coverage and analyst workflows are still uneven across source types.
+This version adds deployment, authentication, alerting, observability, cross-signal correlation, analyst review workflows, and a governed agent layer on top of the V2 extraction pipeline.
 
-### Implemented Today
-1.  **Collect** raw web content from competitor URLs with retry logic.
+### Implemented in V3
+1.  **Collect** raw web content from competitor URLs with retry logic and URL safety guardrails.
 2.  **Detect changes** with SHA-256 snapshots and skip unchanged pages.
-3.  **Extract** one or more structured events from changed pages using Gemini prompts.
+3.  **Extract** structured events using signal-specific Gemini prompts.
 4.  **Calibrate** confidence scores with a second-pass LLM review.
-5.  **Store** events, snapshots, and failed extractions in SQLite.
-6.  **Schedule** recurring runs via APScheduler.
-7.  **Display** results in a Streamlit dashboard with filtering and charts.
-
-### Current Boundaries
-- The project is **not** production-ready yet: there is no deployment, auth layer, alert routing, or observability stack in the current version.
-- Prompt support exists for several source categories, but not every strategic signal has a fully specialized workflow yet.
-- If `GOOGLE_API_KEY` is not set, the pipeline still runs in a limited mock mode so the ingestion and dashboard flow can be exercised without live LLM extraction.
+5.  **Correlate** events across competitors and signal types using keyword-theme heuristics.
+6.  **Alert** high-confidence events to Slack, Teams, email, or log (secrets from env only).
+7.  **Store** events, snapshots, failures, runs, alerts, reviews, correlations, and budget usage in SQLite.
+8.  **Review** events through an analyst queue with confirm/dismiss/escalate workflow.
+9.  **Observe** pipeline stages with redacted structured tracing (no secrets in traces).
+10. **Schedule** recurring runs via APScheduler with run metadata tracking.
+11. **Display** results in a Streamlit dashboard with tabs for Radar, Review Queue, Correlations, and Operations.
+12. **Deploy** via Docker with separate dashboard, scheduler, and one-shot pipeline services.
+13. **Authenticate** dashboard access via reverse proxy headers or basic password.
+14. **Evaluate** extraction quality with a golden-set harness.
+15. **Govern** agent workflows with tool allowlists, audit logs, step limits, and approval gates.
 
 ### Architecture
 ```
-config.yaml → config_loader.py
+config.yaml → config_loader.py (URL validation, safety checks)
                     ↓
-collector.py → differ.py → extractor.py → db.py → app.py (Streamlit)
-  (Scrape)      (Diff)      (LLM/Gemini)   (SQLite)  (Dashboard)
-                              ↑
-                         prompts/*.txt
-                       (signal-specific)
+collector.py → differ.py → extractor.py → correlator.py → notifier.py → db.py → app.py
+  (Scrape)      (Diff)      (LLM/Gemini)   (Heuristic)    (Alerts)     (SQLite) (Dashboard)
+                              ↑                                           ↑
+                         prompts/*.txt                              observability.py
+                       (signal-specific)                            (redacted tracing)
+                                                                         ↑
+                                                                    agent.py
+                                                                  (governed tools)
 ```
 
 ### Files
 | File | Purpose |
 |---|---|
-| `config.yaml` | Central config: competitors, URLs, LLM settings, schedule |
-| `config_loader.py` | YAML config loading + `.env` secrets management |
-| `schema.py` | Pydantic models: `CompetitorEvent`, `ContentSnapshot`, `SignalSource`, `CompetitorProfile`, `StrategicTheme`, `FailedExtraction` |
+| `config.yaml` | Central config: competitors, URLs, LLM, alerts, observability, auth, budget, retention |
+| `config_loader.py` | YAML loading + `.env` secrets + URL validation guardrails |
+| `schema.py` | Pydantic models: Event, Snapshot, Source, Profile, Theme, Failure, Run, Alert, Review, Correlation, Budget |
 | `collector.py` | Web scraper with exponential backoff retries |
 | `differ.py` | SHA-256 change detection + `difflib` diff summaries |
 | `extractor.py` | Multi-event LLM extraction + confidence calibration |
-| `prompts/` | Templates for `developer_api`, `github`, `open_source`, `corporate`, `careers`, `press`, `generic`, plus forward-looking `academic_sponsorship`, `patent_outer_citation`, `hyperlocal_zoning` (use matching `signal_type` in `config.yaml`) |
-| `db.py` | SQLite: events, snapshots, dead-letter queue |
-| `main.py` | Pipeline orchestrator (collect → diff → extract → store) |
+| `correlator.py` | Cross-signal correlation engine (keyword-theme heuristics) |
+| `notifier.py` | Alert routing: log, Slack, Teams, email (secrets from environment) |
+| `observability.py` | Structured redacted tracing (no secrets, truncated text, hashed URLs) |
+| `auth.py` | Authentication boundary: none, reverse_proxy, or basic password |
+| `agent.py` | Governed agent layer: tool allowlists, audit logs, step limits, approval gates |
+| `evaluator.py` | Golden-set evaluation harness for extraction quality |
+| `prompts/` | Templates for `developer_api`, `github`, `open_source`, `corporate`, `careers`, `press`, `events`, `generic`, plus forward-looking `academic_sponsorship`, `patent_outer_citation`, `hyperlocal_zoning` |
+| `db.py` | SQLite: events, snapshots, failures, runs, alerts, reviews, correlations, budget |
+| `main.py` | Pipeline orchestrator: collect → diff → extract → correlate → alert → store |
 | `scheduler.py` | APScheduler-based recurring execution |
-| `app.py` | Streamlit dashboard with charts and filtering |
-| `tests/` | 41 pytest tests (all mocked, no API calls needed) |
-| `docs/TECH_STACK.md` | Tech stack: libraries, LLM model, runtime processes, and external services |
-| `docs/V3_THREAT_MODEL.md` | Short internal threat model for V3 (SSRF, prompt injection, Streamlit exposure, ops) |
-| `docs/OBSERVABILITY_REDACTION.md` | Redaction policy before Langfuse/LangSmith in prod-like environments |
+| `app.py` | Streamlit dashboard: Radar, Review Queue, Correlations, Operations tabs |
+| `tests/` | pytest tests for all modules (mocked, no API calls needed) |
+| `golden_sets/` | Labeled evaluation data for extraction quality |
+| `Dockerfile` | Container image for dashboard, pipeline, or scheduler |
+| `docker-compose.yml` | Multi-service deployment: dashboard + scheduler + one-shot pipeline |
+| `docs/TECH_STACK.md` | Tech stack reference |
+| `docs/V3_THREAT_MODEL.md` | Internal threat model |
+| `docs/OBSERVABILITY_REDACTION.md` | Redaction policy for traces and logs |
+| `docs/WEAK_SIGNALS_AGENTIC_WORKFLOWS.md` | Agentic workflow spec for all 5 strategic signals |
+| `docs/signals/` | One markdown file per strategic weak signal (idea, goal, workflow, example URLs) |
 
 ---
 
@@ -87,20 +104,40 @@ python scheduler.py
 pytest tests/ -v
 ```
 
+### Docker deployment
+
+```bash
+# Build and start dashboard + scheduler
+docker compose up -d
+
+# Run a one-shot pipeline
+docker compose run --rm pipeline
+
+# Dashboard available at http://localhost:8501
+```
+
 ---
 
 ## Signal Coverage
 
-The codebase supports multiple source categories through `config.yaml`, the collector, and prompt templates. In practice, maturity varies by signal family.
+The codebase supports multiple source categories through `config.yaml`, the collector, and prompt templates.
 
 **Agentic workflow spec (all 5 strategic weak signals):** see [`docs/WEAK_SIGNALS_AGENTIC_WORKFLOWS.md`](docs/WEAK_SIGNALS_AGENTIC_WORKFLOWS.md).
 
+**Per-signal quick docs:** see:
+- [`docs/signals/niche_driver_protocol_update_spikes.md`](docs/signals/niche_driver_protocol_update_spikes.md)
+- [`docs/signals/academic_sponsorship_trajectory.md`](docs/signals/academic_sponsorship_trajectory.md)
+- [`docs/signals/patent_citations_outer_industries.md`](docs/signals/patent_citations_outer_industries.md)
+- [`docs/signals/hyperlocal_factory_town_intelligence.md`](docs/signals/hyperlocal_factory_town_intelligence.md)
+- [`docs/signals/developer_api_subdomain_evolution.md`](docs/signals/developer_api_subdomain_evolution.md)
+- [`docs/signals/non_live_signals.md`](docs/signals/non_live_signals.md) (combined view for framework-level, non-live signals)
+
 ### Best-Supported Today
-- **Developer API / developer portal monitoring** is the most complete path today and has dedicated prompt support.
-- **GitHub / open-source / corporate / careers / press** sources also have prompt coverage or generic fallback support in the current prototype.
+- **Developer API / developer portal monitoring** is the most complete path with dedicated prompt support and golden-set evaluation data.
+- **GitHub / open-source / corporate / careers / press / events** sources have prompt coverage or generic fallback support.
 
 ### Partial / Framework-Level Support
-- Additional strategic signal ideas are documented below, but several of them are still conceptual research directions rather than deeply implemented workflows.
+- **Academic sponsorship**, **patent outer citation**, and **hyperlocal zoning** have prompt files and agentic workflow specs but are not yet wired as live URL targets in `config.yaml`.
 
 ## The 5 Strategic "Weak Signals" (Interview Framework)
 
@@ -110,18 +147,27 @@ The codebase supports multiple source categories through `config.yaml`, the coll
 | 2 | **Academic Sponsorship Trajectory** | University "Future Lab" funding, PhD fellowships | 5–10 years ahead |
 | 3 | **Patent Citations from "Outer" Industries** | Patent databases (cross-sector citations) | 2–5 years ahead |
 | 4 | **Hyper-Local "Factory Town" Intelligence** | Local German newspapers, municipal zoning filings | 3–12 months ahead |
-| 5 | **Developer API & Subdomain Evolution** ✅ | Developer portals, CT logs, API catalogs | 3–6 months ahead |
+| 5 | **Developer API & Subdomain Evolution** | Developer portals, CT logs, API catalogs | 3–6 months ahead |
 
-> Signal 5 is the strongest implemented workflow in the current prototype.
-> Signal 1 has dedicated prompt support, while the remaining signal families are still broader prototype coverage areas rather than deeply specialized pipelines.
+---
 
-### Additional Signals (Reference List)
-- Job Posting "Cluster" Shifts (tech stack changes by geography)
-- Local Energy Grid Requests (power upgrades near factories)
-- Shipping Manifest Anomalies (rare earth / semiconductor imports)
-- Employee Sentiment Volatility (Glassdoor/Kununu for specific divisions)
-- Standardization Body Activity (OPC UA FX, 6G voting patterns)
-- Domain Name / Subdomain Registrations
+## V3 Improvements Over V2
+
+| Area | V2 | V3 |
+|---|---|---|
+| **Deployment** | Local only | Docker + docker-compose |
+| **Authentication** | None | Reverse proxy or basic password |
+| **Alerting** | None | Slack, Teams, email, log (secrets from env) |
+| **Observability** | Print logging | Structured redacted tracing |
+| **Correlation** | None | Cross-signal keyword-theme heuristics |
+| **Analyst Workflow** | View only | Confirm/dismiss/escalate review queue |
+| **Agent Layer** | None | Governed tools with allowlists, audit logs, approval gates |
+| **Evaluation** | None | Golden-set harness for extraction quality |
+| **Data Model** | 3 tables | 8 tables (events, snapshots, failures, runs, alerts, reviews, correlations, budget) |
+| **Config Safety** | No validation | URL scheme validation, private IP blocking, duplicate detection |
+| **Budget Control** | None | Per-run token and call limits |
+| **Retention** | None | Configurable retention windows with automatic cleanup |
+| **Signal Coverage** | No events prompt | Events prompt + expanded Rockwell config |
 
 ---
 
@@ -136,43 +182,8 @@ The codebase supports multiple source categories through `config.yaml`, the coll
 | **Confidence** | LLM always returns high | Two-pass calibration with rubric |
 | **Scheduling** | Manual only | APScheduler with configurable interval |
 | **Error Handling** | Basic try/except | Exponential backoff retries + dead-letter queue |
-| **Data Model** | Flat `CompetitorEvent` | 6 models: Event, Snapshot, Source, Profile, Theme, Failure |
+| **Data Model** | Flat `CompetitorEvent` | Rich model with snapshots, failures, run metadata |
 | **Security** | API key in env var | `python-dotenv` + `.env` file + `.env.example` |
-| **Dashboard** | Functional but basic | Charts, timelines, confidence histogram, NEW badges, dark mode |
-| **Testing** | Manual only | 41 pytest tests (all mocked) |
-| **Logging** | `print()` statements | Structured `logging` module |
-
----
-
-## V3 Roadmap (Future)
-
-**Recommended sequence:** Implement **authentication, safe deployment, and secret handling for outbound integrations (alerts)** before scaling **deep agents** and **broad RAG**—tool-calling and retrieval increase operational and security risk. **Observability** is useful early, but only after adopting the [observability redaction policy](docs/OBSERVABILITY_REDACTION.md). For risks and mitigations, see the [V3 threat model](docs/V3_THREAT_MODEL.md).
-
-### Phase 1 — Foundation (ship first)
-
-- [ ] **Authentication & deployment** — Docker + cloud deployment + explicit user auth (e.g. SSO/OIDC or reverse proxy in front of Streamlit); do not expose the dashboard to the public internet without auth
-- [ ] **Alert routing** — Slack/Teams/email for high-confidence alerts; store webhook URLs and tokens in a secrets manager, rotate on leak, least-privilege channels
-- [ ] **Observability** — Langfuse/LangSmith for prompt tracing and token tracking; apply [redaction rules](docs/OBSERVABILITY_REDACTION.md) before prod-like or multi-user environments
-
-### Phase 2 — Intelligence depth
-
-- [ ] **Broader signal specialization** — Move more source categories from generic/fallback prompting into dedicated extraction workflows
-- [ ] **Cross-signal correlation** — Detect when multiple signals align
-- [ ] **Vector storage (RAG)** — ChromaDB/pgvector for semantic search across evidence; pair with access control and retrieval-aware defenses (see threat model)
-
-### Phase 3 — Agentic expansion (after Phase 1)
-
-- [ ] **Deep Agent layer** — LangChain agent for analyst investigation workflows; tool allowlists, URL policies, and audit logging for every external call
-
-### Cross-cutting (throughout V3)
-
-- [ ] **Data lifecycle & compliance** — Retention for snapshots/events, export/delete where needed, classification of competitive intel vs. PII (e.g. careers content)
-- [ ] **Config guardrails** — Validate/review `config.yaml` URL lists (HTTPS-only mindset, avoid accidental internal or `file:` targets as config becomes more dynamic)
-- [ ] **Evaluation harness** — Golden-set regression tests for extraction when prompts or models change
-- [ ] **Cost & quota governance** — Per-run/per-competitor budgets; caps on input size and on agent tool-call loops
-- [ ] **Human-in-the-loop** — Optional analyst confirmation before alerts or high-impact exports
-- [ ] **Backup & recovery** — SQLite backup discipline; automated DB backups if moving to Postgres/pgvector
-- [ ] **Optional API layer** — Small authenticated HTTP API if multiple clients need data beyond Streamlit
 
 ---
 
@@ -180,18 +191,27 @@ The codebase supports multiple source categories through `config.yaml`, the coll
 
 | Layer | Tool |
 |---|---|
-| Language | Python 3.14 |
+| Language | Python 3.12+ |
 | LLM | Google Gemini (`gemini-2.5-flash`) via `langchain_google_genai` |
 | Orchestration | LangChain |
 | Web Scraping | `requests` + `BeautifulSoup4` |
-| Database | SQLite |
-| Data Validation | Pydantic |
-| Dashboard | Streamlit + Altair |
+| Change Detection | SHA-256 + `difflib` |
+| Database | SQLite (WAL mode) |
+| Dashboard | Streamlit |
+| Charts | Altair |
 | Scheduling | APScheduler |
-| Config | YAML + `python-dotenv` |
-| Testing | pytest |
+| Config | YAML + Pydantic |
+| Secrets | `python-dotenv` + environment variables |
+| Testing | pytest (mocked) |
+| Container | Docker + docker-compose |
 
 ---
 
-## License
-Internal prototype — not for distribution.
+## Future Directions
+
+- **RAG / vector retrieval** — ChromaDB/pgvector for semantic search across evidence
+- **Deeper agent workflows** — Multi-step investigation with tool-calling LLM agents
+- **Postgres migration** — For concurrent access and horizontal scale
+- **Langfuse/LangSmith** — Pluggable observability backend (redaction layer ready)
+- **SSO/OIDC** — Production authentication
+- **API layer** — Authenticated HTTP API for programmatic access

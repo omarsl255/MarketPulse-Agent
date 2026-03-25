@@ -1,15 +1,18 @@
 """
-app.py — V2 Streamlit Dashboard with polished hierarchy, cards, and empty states.
+app.py — V3 Streamlit Dashboard with auth, alert review queue,
+correlation view, and analyst workflow features.
 """
 
 import html
 import json
 import os
+import uuid
 
 import pandas as pd
 import streamlit as st
 
-from config_loader import load_secrets
+from auth import streamlit_auth_gate
+from config_loader import load_secrets, get_config
 from db import (
     DB_PATH,
     clear_all_snapshots,
@@ -18,7 +21,14 @@ from db import (
     delete_events_by_event_type,
     get_all_events,
     get_failed_extractions,
+    get_all_runs,
+    get_all_alerts,
+    get_all_correlations,
+    get_unreviewed_events,
+    save_review,
+    update_event_review,
 )
+from schema import AnalystReview
 from viz_utils import (
     build_run_history_df,
     compute_week_over_week_deltas,
@@ -64,35 +74,36 @@ def get_confidence_badge(score):
 
 def render_section_header(label, title, caption):
     """Render a reusable section heading block."""
-    st.markdown(
-        f"""
-        <div class="section-header">
-            <div class="section-label">{html.escape(label)}</div>
-            <div class="section-title">{html.escape(title)}</div>
-            <div class="section-caption">{html.escape(caption)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    header_html = "\n".join([
+        '<div class="section-header">',
+        f'<div class="section-label">{html.escape(label)}</div>',
+        f'<div class="section-title">{html.escape(title)}</div>',
+        f'<div class="section-caption">{html.escape(caption)}</div>',
+        "</div>",
+    ])
+    st.markdown(header_html, unsafe_allow_html=True)
 
 
 def render_empty_state(title, message, tips):
     """Render a friendly empty state for low or zero-data views."""
     tips_html = "".join(f"<li>{html.escape(tip)}</li>" for tip in tips)
-    st.markdown(
-        f"""
-        <div class="empty-state">
-            <div class="empty-state-title">{html.escape(title)}</div>
-            <div class="empty-state-text">{html.escape(message)}</div>
-            <ul class="empty-state-list">{tips_html}</ul>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    block_html = "\n".join([
+        '<div class="empty-state">',
+        f'<div class="empty-state-title">{html.escape(title)}</div>',
+        f'<div class="empty-state-text">{html.escape(message)}</div>',
+        f'<ul class="empty-state-list">{tips_html}</ul>',
+        "</div>",
+    ])
+    st.markdown(block_html, unsafe_allow_html=True)
 
 
 def render_signal_card(row):
-    """Render one signal card in the feed."""
+    """Render one signal card in the feed.
+
+    The card is built as a single HTML block with **no leading whitespace**
+    (avoids Markdown interpreting it as an indented code-block) and **no
+    blank lines** (avoids prematurely ending the HTML block in CommonMark).
+    """
     score_value = row.get("confidence_score", 0.0)
     score = 0.0 if pd.isna(score_value) else float(score_value)
     is_new_value = row.get("is_new", 0)
@@ -110,7 +121,25 @@ def render_signal_card(row):
     source_url = html.escape(safe_value(row.get("source_url"), "#"), quote=True)
     content_hash = safe_value(row.get("content_hash"), "—")
     content_hash = content_hash[:16] + "..." if content_hash != "—" else content_hash
+
+    review_status = safe_value(row.get("review_status"), "unreviewed")
+    correlation_id = safe_value(row.get("correlation_id"), "")
+
     new_badge = '<span class="badge badge-new">NEW</span>' if is_new else ""
+    review_badge = ""
+    if review_status == "confirmed":
+        review_badge = '<span class="badge" style="background:#22c55e;">CONFIRMED</span>'
+    elif review_status == "dismissed":
+        review_badge = '<span class="badge" style="background:#6b7280;">DISMISSED</span>'
+    elif review_status == "escalated":
+        review_badge = '<span class="badge" style="background:#f59e0b;">ESCALATED</span>'
+
+    corr_tag = ""
+    if correlation_id and correlation_id != "—":
+        corr_tag = '<span class="badge" style="background:#8b5cf6;">CORRELATED</span>'
+
+    badges = " ".join(filter(None, [get_confidence_badge(score), new_badge, review_badge, corr_tag]))
+
     details = html.escape(
         json.dumps(
             {
@@ -118,41 +147,39 @@ def render_signal_card(row):
                 "confidence_score": round(score, 2),
                 "run_id": safe_value(row.get("run_id"), "—"),
                 "content_hash": content_hash,
+                "review_status": review_status,
+                "correlation_id": correlation_id if correlation_id != "—" else "",
+                "provenance": safe_value(row.get("provenance"), "pipeline"),
             },
             indent=2,
         )
     )
 
-    st.markdown(
-        f"""
-        <div class="feed-card">
-            <div class="feed-card-badges">
-                {get_confidence_badge(score)}
-                {new_badge}
-            </div>
-            <div class="feed-card-title">{title}</div>
-            <div class="feed-card-implication">
-                <strong>Strategic implication for ABB</strong><br>
-                <em>{implication}</em>
-            </div>
-            <div class="feed-card-meta">
-                <span><strong>Competitor:</strong> {competitor}</span>
-                <span><strong>Type:</strong> {event_type}</span>
-                <span><strong>Signal:</strong> {signal_label}</span>
-                <span><strong>Detected:</strong> {date_label}</span>
-                <span><a href="{source_url}" target="_blank" rel="noopener noreferrer">Source</a></span>
-            </div>
-            <details class="feed-details">
-                <summary>Evidence and technical details</summary>
-                <div class="feed-card-copy-secondary">
-                    <p><strong>What happened:</strong> {description}</p>
-                </div>
-                <pre>{details}</pre>
-            </details>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    card_html = "\n".join([
+        '<div class="feed-card">',
+        f'<div class="feed-card-badges">{badges}</div>',
+        f'<div class="feed-card-title">{title}</div>',
+        '<div class="feed-card-implication">',
+        "<strong>Strategic implication for ABB</strong><br>",
+        f"<em>{implication}</em>",
+        "</div>",
+        '<div class="feed-card-meta">',
+        f"<span><strong>Competitor:</strong> {competitor}</span>",
+        f"<span><strong>Type:</strong> {event_type}</span>",
+        f"<span><strong>Signal:</strong> {signal_label}</span>",
+        f"<span><strong>Detected:</strong> {date_label}</span>",
+        f'<span><a href="{source_url}" target="_blank" rel="noopener noreferrer">Source</a></span>',
+        "</div>",
+        '<details class="feed-details">',
+        "<summary>Evidence and technical details</summary>",
+        '<div class="feed-card-copy-secondary">',
+        f"<p><strong>What happened:</strong> {description}</p>",
+        "</div>",
+        f"<pre>{details}</pre>",
+        "</details>",
+        "</div>",
+    ])
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def _feed_sort_column_options(df_columns):
@@ -201,10 +228,10 @@ def apply_feed_filters_and_sort(source_df):
     if st.session_state.get("feed_high_only") and "confidence_score" in out.columns:
         out = out[out["confidence_score"] > HIGH_CONFIDENCE_THRESHOLD]
 
-    if "event_type" in out.columns:
-        sel_et = st.session_state.get("feed_event_types") or []
-        if sel_et:
-            out = out[out["event_type"].isin(sel_et)]
+    if "signal_type" in out.columns:
+        sel_st = st.session_state.get("feed_signal_types") or []
+        if sel_st:
+            out = out[out["signal_type"].isin(sel_st)]
 
     q = (st.session_state.get("feed_search") or "").strip().lower()
     if q:
@@ -260,13 +287,17 @@ def apply_feed_filters_and_sort(source_df):
 # ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Competitor Radar — V2",
+    page_title="RivalSense — V3",
     page_icon="📡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 load_secrets()
+config = get_config()
+
+# Auth gate
+streamlit_auth_gate(config.auth)
 
 # Dark-mode-friendly custom CSS
 st.markdown(
@@ -607,51 +638,56 @@ if not os.environ.get("GOOGLE_API_KEY"):
     )
 
 # ───────────────────────────────────────────────────────────────
+# Navigation tabs
+# ───────────────────────────────────────────────────────────────
+
+tab_radar, tab_review, tab_correlations, tab_ops = st.tabs(
+    ["Radar", "Review Queue", "Correlations", "Operations"]
+)
+
+# ───────────────────────────────────────────────────────────────
 # Sidebar: filters & controls
 # ───────────────────────────────────────────────────────────────
 
 st.sidebar.header("Controls")
 
-# Fetch data
 events_raw = get_all_events()
 
 if not events_raw:
-    st.markdown(
-        """
-        <div class="hero-banner">
-            <div class="hero-kicker">Competitive Intelligence</div>
-            <h1 class="hero-title">📡 Early-Warning Intelligence Radar</h1>
-            <div class="hero-subtitle">
-                Monitor weak signals across competitors, track momentum shifts,
-                and surface evidence that may matter to ABB.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    empty_tips = [
-        "Run python main.py to collect and extract events.",
-        "Refresh the page after the pipeline finishes.",
-        "Use scheduler.py later if you want recurring updates.",
-    ]
-    if not os.environ.get("GOOGLE_API_KEY"):
-        empty_tips.insert(
-            0,
-            "Set GOOGLE_API_KEY in .env (see .env.example) for real LLM extraction; "
-            "without it, the pipeline only stores mock signals.",
+    with tab_radar:
+        hero_html = "\n".join([
+            '<div class="hero-banner">',
+            '<div class="hero-kicker">Competitive Intelligence</div>',
+            '<h1 class="hero-title">RivalSense &mdash; Early-Warning Radar</h1>',
+            '<div class="hero-subtitle">',
+            "Monitor weak signals across competitors, track momentum shifts,",
+            "and surface evidence that may matter to ABB.",
+            "</div>",
+            "</div>",
+        ])
+        st.markdown(hero_html, unsafe_allow_html=True)
+        empty_tips = [
+            "Run python main.py to collect and extract events.",
+            "Refresh the page after the pipeline finishes.",
+            "Use scheduler.py later if you want recurring updates.",
+        ]
+        if not os.environ.get("GOOGLE_API_KEY"):
+            empty_tips.insert(
+                0,
+                "Set GOOGLE_API_KEY in .env (see .env.example) for real LLM extraction; "
+                "without it, the pipeline only stores mock signals.",
+            )
+        render_empty_state(
+            "No intelligence events found yet",
+            "The dashboard is ready, but there is no stored signal data to visualize. "
+            "Run the collection pipeline once to populate the feed and charts.",
+            empty_tips,
         )
-    render_empty_state(
-        "No intelligence events found yet",
-        "The dashboard is ready, but there is no stored signal data to visualize. "
-        "Run the collection pipeline once to populate the feed and charts.",
-        empty_tips,
-    )
     st.stop()
 
 full_df = pd.DataFrame(events_raw)
 df = full_df.copy()
 
-# Ensure is_new column exists (backward compat)
 if "is_new" not in full_df.columns:
     full_df["is_new"] = 1
 if "is_new" not in df.columns:
@@ -671,16 +707,16 @@ if "radar_signals" not in st.session_state:
 if "radar_min_conf" not in st.session_state:
     st.session_state.radar_min_conf = 0.0
 
-st.sidebar.markdown(
-    """
-    <div class="sidebar-note">
-        <strong>Pipeline</strong><br>
-        <code>python main.py</code> · <code>python scheduler.py</code><br>
-        <span style="opacity:0.88">Secrets: <code>prototype/.env</code> · <code>GOOGLE_API_KEY</code></span>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+alerts_label = "enabled" if config.alerts.enabled else "disabled"
+sidebar_html = "\n".join([
+    '<div class="sidebar-note">',
+    "<strong>RivalSense V3</strong><br>",
+    "<code>python main.py</code> &middot; <code>python scheduler.py</code><br>",
+    f'<span style="opacity:0.88">Alerts: <code>{html.escape(alerts_label)}</code>',
+    f'&middot; Auth: <code>{html.escape(config.auth.provider)}</code></span>',
+    "</div>",
+])
+st.sidebar.markdown(sidebar_html, unsafe_allow_html=True)
 
 with st.sidebar.expander("Pipeline maintenance", expanded=False):
     n_snap = count_snapshots()
@@ -690,7 +726,7 @@ with st.sidebar.expander("Pipeline maintenance", expanded=False):
         "Clear snapshots so the next run treats every URL as changed and runs "
         "extraction again (useful after adding GOOGLE_API_KEY)."
     )
-    if st.button("Clear all snapshots", use_container_width=True, key="clear_snapshots_btn"):
+    if st.button("Clear all snapshots", width="stretch", key="clear_snapshots_btn"):
         removed = clear_all_snapshots()
         st.success(f"Removed {removed} snapshot(s). Run `python main.py` to re-extract.")
     st.caption(
@@ -699,7 +735,7 @@ with st.sidebar.expander("Pipeline maintenance", expanded=False):
     )
     if st.button(
         "Remove MOCK_SIGNAL events",
-        use_container_width=True,
+        width="stretch",
         key="delete_mock_events_btn",
     ):
         deleted = delete_events_by_event_type("MOCK_SIGNAL")
@@ -726,7 +762,7 @@ with st.sidebar.expander("Filters", expanded=False):
         key="radar_min_conf",
         step=0.05,
     )
-    if st.button("Reset filters", use_container_width=True, key="radar_reset_filters"):
+    if st.button("Reset filters", width="stretch", key="radar_reset_filters"):
         st.session_state.radar_competitors = list(competitors_available)
         st.session_state.radar_signals = list(signal_types)
         st.session_state.radar_min_conf = 0.0
@@ -767,7 +803,7 @@ if show_run_history:
             rh_df,
             height=220,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
 failed = get_failed_extractions()
@@ -778,356 +814,427 @@ if failed:
     with st.sidebar.expander("View failures"):
         for failure in failed[:5]:
             cat = failure.get("failure_category") or "unknown"
-            http = failure.get("http_status_code")
-            http_part = f" HTTP {http}" if http is not None else ""
+            http_code = failure.get("http_status_code")
+            http_part = f" HTTP {http_code}" if http_code is not None else ""
             msg = (failure.get("error_message") or "")[:120]
             st.sidebar.text(f"{failure['url']}\n[{cat}{http_part}] {msg}")
 
-# ───────────────────────────────────────────────────────────────
-# Header
-# ───────────────────────────────────────────────────────────────
 
-filtered_count = len(df)
-total_count = len(full_df)
-new_count = int(df["is_new"].sum()) if "is_new" in df.columns else 0
-high_confidence_count = len(df[df["confidence_score"] > HIGH_CONFIDENCE_THRESHOLD])
-competitor_count = len(df["competitor"].unique()) if filtered_count > 0 else 0
-avg_confidence = f"{df['confidence_score'].mean():.2f}" if filtered_count > 0 else "0.00"
-latest_detected = "Unknown"
-if filtered_count > 0 and "date_detected" in df.columns:
-    latest_date = pd.to_datetime(df["date_detected"], errors="coerce").max()
-    if pd.notna(latest_date):
-        latest_detected = latest_date.strftime("%Y-%m-%d")
+# ═══════════════════════════════════════════════════════════════
+# TAB: RADAR (main intelligence view)
+# ═══════════════════════════════════════════════════════════════
 
-hero_col, summary_col = st.columns([2.2, 1])
+with tab_radar:
+    filtered_count = len(df)
+    total_count = len(full_df)
+    new_count = int(df["is_new"].sum()) if "is_new" in df.columns else 0
+    high_confidence_count = len(df[df["confidence_score"] > HIGH_CONFIDENCE_THRESHOLD])
+    competitor_count = len(df["competitor"].unique()) if filtered_count > 0 else 0
+    avg_confidence = f"{df['confidence_score'].mean():.2f}" if filtered_count > 0 else "0.00"
+    latest_detected = "Unknown"
+    if filtered_count > 0 and "date_detected" in df.columns:
+        latest_date = pd.to_datetime(df["date_detected"], errors="coerce").max()
+        if pd.notna(latest_date):
+            latest_detected = latest_date.strftime("%Y-%m-%d")
 
-with hero_col:
-    st.markdown(
-        f"""
-        <div class="hero-banner">
-            <div class="hero-kicker">Competitive Intelligence Dashboard</div>
-            <h1 class="hero-title">📡 Early-Warning Intelligence Radar</h1>
-            <div class="hero-subtitle">
-                Scan emerging competitor activity, compare weak signals across sources,
-                and focus on the stories most worth analyst attention.
-            </div>
-            <div class="hero-chip-row">
-                <span class="hero-chip">{total_count} total stored signals</span>
-                <span class="hero-chip">{selected_competitors_label}</span>
-                <span class="hero-chip">{selected_signal_label}</span>
-                <span class="hero-chip">Min confidence {min_confidence:.2f}</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    hero_col, summary_col = st.columns([2.2, 1])
 
-with summary_col:
-    st.markdown(
-        f"""
-        <div class="summary-panel">
-            <div class="summary-eyebrow">Current view</div>
-            <div class="summary-value">{filtered_count}</div>
-            <div class="summary-caption">signals match the active filters</div>
-            <div class="summary-list">
-                <div class="summary-item">
-                    <div class="summary-label">Average confidence</div>
-                    <div class="summary-text">{avg_confidence}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Latest detection</div>
-                    <div class="summary-text">{latest_detected}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Competitors represented</div>
-                    <div class="summary-text">{competitor_count}</div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with hero_col:
+        hero_html = "\n".join([
+            '<div class="hero-banner">',
+            '<div class="hero-kicker">Competitive Intelligence Dashboard</div>',
+            '<h1 class="hero-title">RivalSense &mdash; Early-Warning Radar</h1>',
+            '<div class="hero-subtitle">',
+            "Scan emerging competitor activity, compare weak signals across sources,",
+            "and focus on the stories most worth analyst attention.",
+            "</div>",
+            '<div class="hero-chip-row">',
+            f'<span class="hero-chip">{total_count} total stored signals</span>',
+            f'<span class="hero-chip">{html.escape(selected_competitors_label)}</span>',
+            f'<span class="hero-chip">{html.escape(selected_signal_label)}</span>',
+            f'<span class="hero-chip">Min confidence {min_confidence:.2f}</span>',
+            "</div>",
+            "</div>",
+        ])
+        st.markdown(hero_html, unsafe_allow_html=True)
 
-# ───────────────────────────────────────────────────────────────
-# Metrics row
-# ───────────────────────────────────────────────────────────────
+    with summary_col:
+        summary_html = "\n".join([
+            '<div class="summary-panel">',
+            '<div class="summary-eyebrow">Current view</div>',
+            f'<div class="summary-value">{filtered_count}</div>',
+            '<div class="summary-caption">signals match the active filters</div>',
+            '<div class="summary-list">',
+            '<div class="summary-item">',
+            '<div class="summary-label">Average confidence</div>',
+            f'<div class="summary-text">{avg_confidence}</div>',
+            "</div>",
+            '<div class="summary-item">',
+            '<div class="summary-label">Latest detection</div>',
+            f'<div class="summary-text">{html.escape(latest_detected)}</div>',
+            "</div>",
+            '<div class="summary-item">',
+            '<div class="summary-label">Competitors represented</div>',
+            f'<div class="summary-text">{competitor_count}</div>',
+            "</div>",
+            "</div>",
+            "</div>",
+        ])
+        st.markdown(summary_html, unsafe_allow_html=True)
 
-render_section_header(
-    "Overview",
-    "Seven-day momentum",
-    "Primary numbers reflect the full filtered view. Deltas compare the latest 7 days to the prior 7 days. "
-    "Sparklines show the last 30 days in the current view.",
-)
-
-deltas = compute_week_over_week_deltas(df)
-
-
-def _delta_for_metric(d):
-    if d is None:
-        return None
-    if abs(d - round(d)) < 1e-9:
-        return int(round(d))
-    return round(d, 2)
-
-
-col1, col2, col3, col4 = st.columns(4)
-_, td = deltas["total"]
-col1.metric(
-    "Total signals",
-    filtered_count,
-    delta=_delta_for_metric(td),
-    help="Change in event count: last 7 days vs previous 7 days (same filters).",
-)
-_, hd = deltas["high_conf"]
-col2.metric(
-    "High confidence (>0.7)",
-    high_confidence_count,
-    delta=_delta_for_metric(hd),
-    help="High-confidence events in the filtered view; delta uses the same 7-day windows.",
-)
-_, nd = deltas["new"]
-col3.metric(
-    "New signals",
-    new_count,
-    delta=_delta_for_metric(nd),
-    help="Rows flagged new in the filtered view; delta uses 7-day windows on detection dates.",
-)
-cv7, cd = deltas["competitors"]
-col4.metric(
-    "Competitors (last 7 days)",
-    int(cv7),
-    delta=_delta_for_metric(cd),
-    help="Distinct competitors with at least one event in the latest 7-day window vs the prior 7 days (same filters). "
-    f"Full filtered view includes {competitor_count} competitor(s) overall.",
-)
-
-spark_total = daily_series(df, end_days=30)
-spark_high = daily_series(
-    df,
-    end_days=30,
-    predicate=lambda r: float(r.get("confidence_score") or 0) > HIGH_CONFIDENCE_THRESHOLD,
-)
-spark_new = daily_series(
-    df,
-    end_days=30,
-    predicate=lambda r: int(r.get("is_new") or 0) == 1,
-)
-spark_comp = daily_competitor_nunique(df, end_days=30)
-
-sp1, sp2, sp3, sp4 = st.columns(4)
-with sp1:
-    st.caption("30d daily volume")
-    st.altair_chart(sparkline_chart(spark_total), width="stretch")
-with sp2:
-    st.caption("30d high-conf per day")
-    st.altair_chart(sparkline_chart(spark_high), width="stretch")
-with sp3:
-    st.caption("30d new per day")
-    st.altair_chart(sparkline_chart(spark_new), width="stretch")
-with sp4:
-    st.caption("30d distinct competitors / day")
-    st.altair_chart(sparkline_chart(spark_comp), width="stretch")
-
-if filtered_count == 0:
+    # Metrics row
     render_section_header(
-        "Current view",
-        "No signals match the selected filters",
-        "The dashboard is working, but the current filters are too narrow for the available data.",
+        "Overview",
+        "Seven-day momentum",
+        "Primary numbers reflect the full filtered view. Deltas compare the latest 7 days to the prior 7 days.",
     )
-    render_empty_state(
-        "Try widening the filters",
-        "There are stored events in the database, but none meet the current competitor, signal type, or confidence settings.",
-        [
-            "Lower the minimum confidence threshold in the sidebar.",
-            "Re-select all competitors or all signal types.",
-            "Run the pipeline again if you expect fresh signal coverage.",
-        ],
+
+    deltas = compute_week_over_week_deltas(df)
+
+    def _delta_for_metric(d):
+        if d is None:
+            return None
+        if abs(d - round(d)) < 1e-9:
+            return int(round(d))
+        return round(d, 2)
+
+    col1, col2, col3, col4 = st.columns(4)
+    _, td = deltas["total"]
+    col1.metric("Total signals", filtered_count, delta=_delta_for_metric(td))
+    _, hd = deltas["high_conf"]
+    col2.metric("High confidence (>0.7)", high_confidence_count, delta=_delta_for_metric(hd))
+    _, nd = deltas["new"]
+    col3.metric("New signals", new_count, delta=_delta_for_metric(nd))
+    cv7, cd = deltas["competitors"]
+    col4.metric("Competitors (last 7d)", int(cv7), delta=_delta_for_metric(cd))
+
+    spark_total = daily_series(df, end_days=30)
+    spark_high = daily_series(
+        df, end_days=30,
+        predicate=lambda r: float(r.get("confidence_score") or 0) > HIGH_CONFIDENCE_THRESHOLD,
     )
-    st.stop()
-
-# ───────────────────────────────────────────────────────────────
-# Charts
-# ───────────────────────────────────────────────────────────────
-
-render_section_header(
-    "Analytics",
-    "Signal trends and distribution",
-    "Use these charts to understand how activity clusters over time and how strong the extracted signals appear.",
-)
-
-chart_col1, chart_col2 = st.columns(2)
-
-with chart_col1:
-    st.markdown("#### Signals timeline")
-    st.markdown(
-        '<div class="chart-note">Bars when data is dense; markers when dates are sparse or few distinct days.</div>',
-        unsafe_allow_html=True,
+    spark_new = daily_series(
+        df, end_days=30,
+        predicate=lambda r: int(r.get("is_new") or 0) == 1,
     )
-    if "date_detected" in df.columns and len(df) > 0:
-        df_chart = df.copy()
-        df_chart["date"] = pd.to_datetime(df_chart["date_detected"], errors="coerce").dt.date
-        df_chart = df_chart.dropna(subset=["date"])
-        if len(df_chart) > 0:
-            if "competitor" not in df_chart.columns:
-                df_chart["competitor"] = "—"
-            if "title" not in df_chart.columns:
-                df_chart["title"] = ""
-            timeline, timeline_note = timeline_chart_for_df(df_chart)
-            st.altair_chart(timeline, width="stretch")
-            st.caption(f"{timeline_summary_stats(df_chart)} {timeline_note}")
-        else:
-            render_empty_state(
-                "No valid dates to chart",
-                "The current results do not include usable detection dates for the timeline.",
-                ["Inspect the signal details to confirm source metadata."],
-            )
-    else:
+    spark_comp = daily_competitor_nunique(df, end_days=30)
+
+    sp1, sp2, sp3, sp4 = st.columns(4)
+    with sp1:
+        st.caption("30d daily volume")
+        st.altair_chart(sparkline_chart(spark_total), width="stretch")
+    with sp2:
+        st.caption("30d high-conf per day")
+        st.altair_chart(sparkline_chart(spark_high), width="stretch")
+    with sp3:
+        st.caption("30d new per day")
+        st.altair_chart(sparkline_chart(spark_new), width="stretch")
+    with sp4:
+        st.caption("30d distinct competitors / day")
+        st.altair_chart(sparkline_chart(spark_comp), width="stretch")
+
+    if filtered_count == 0:
+        render_section_header(
+            "Current view",
+            "No signals match the selected filters",
+            "The dashboard is working, but the current filters are too narrow for the available data.",
+        )
         render_empty_state(
-            "Timeline unavailable",
-            "This dataset does not currently include the fields needed to render the timeline view.",
-            ["Run the latest pipeline flow to refresh stored events."],
+            "Try widening the filters",
+            "There are stored events in the database, but none meet the current settings.",
+            [
+                "Lower the minimum confidence threshold in the sidebar.",
+                "Re-select all competitors or all signal types.",
+                "Run the pipeline again if you expect fresh signal coverage.",
+            ],
+        )
+    else:
+        # Charts
+        render_section_header(
+            "Analytics",
+            "Signal trends and distribution",
+            "Use these charts to understand how activity clusters over time.",
         )
 
-with chart_col2:
-    st.markdown("#### Confidence distribution")
-    conf_mode = st.radio(
-        "View",
-        ("Histogram", "Strip plot", "Decile table"),
-        horizontal=True,
-        key="radar_confidence_view",
-        label_visibility="collapsed",
-    )
-    st.markdown(
-        '<div class="chart-note">Histogram, strip by competitor, or decile bucket counts.</div>',
-        unsafe_allow_html=True,
-    )
-    if len(df) > 0:
-        cchart = confidence_chart(df, conf_mode)
-        if cchart is not None:
-            st.altair_chart(cchart, width="stretch")
-            st.caption(confidence_summary_stats(df))
-        else:
-            render_empty_state(
-                "No confidence scores",
-                "The current rows do not include usable confidence_score values.",
-                ["Re-run extraction or widen filters."],
+        chart_col1, chart_col2 = st.columns(2)
+
+        with chart_col1:
+            st.markdown("#### Signals timeline")
+            st.markdown(
+                '<div class="chart-note">Bars when data is dense; markers when sparse.</div>',
+                unsafe_allow_html=True,
             )
-    else:
+            if "date_detected" in df.columns and len(df) > 0:
+                df_chart = df.copy()
+                df_chart["date"] = pd.to_datetime(df_chart["date_detected"], errors="coerce").dt.date
+                df_chart = df_chart.dropna(subset=["date"])
+                if len(df_chart) > 0:
+                    if "competitor" not in df_chart.columns:
+                        df_chart["competitor"] = "—"
+                    if "title" not in df_chart.columns:
+                        df_chart["title"] = ""
+                    timeline, timeline_note = timeline_chart_for_df(df_chart)
+                    st.altair_chart(timeline, width="stretch")
+                    st.caption(f"{timeline_summary_stats(df_chart)} {timeline_note}")
+
+        with chart_col2:
+            st.markdown("#### Confidence distribution")
+            conf_mode = st.radio(
+                "View",
+                ("Histogram", "Strip plot", "Decile table"),
+                horizontal=True,
+                key="radar_confidence_view",
+                label_visibility="collapsed",
+            )
+            if len(df) > 0:
+                cchart = confidence_chart(df, conf_mode)
+                if cchart is not None:
+                    st.altair_chart(cchart, width="stretch")
+                    st.caption(confidence_summary_stats(df))
+
+        # Event feed
+        render_section_header(
+            "Signal feed",
+            "Latest intelligence stories",
+            "Each card highlights the event, source context, and strategic implication.",
+        )
+
+        all_feed_signal_types = (
+            sorted(df["signal_type"].dropna().unique().tolist())
+            if "signal_type" in df.columns and len(df) > 0
+            else []
+        )
+        if "feed_signal_types" not in st.session_state:
+            st.session_state.feed_signal_types = list(all_feed_signal_types)
+        else:
+            st.session_state.feed_signal_types = [
+                x for x in st.session_state.feed_signal_types if x in all_feed_signal_types
+            ]
+
+        if "feed_sort_primary" not in st.session_state:
+            st.session_state.feed_sort_primary = "Date detected"
+        if "feed_sort_secondary" not in st.session_state:
+            st.session_state.feed_sort_secondary = "(none)"
+        if "feed_sort_order" not in st.session_state:
+            st.session_state.feed_sort_order = "Descending"
+
+        st.markdown("**Feed view**")
+        _f1, _f2 = st.columns([4, 1])
+        with _f1:
+            st.caption("Filter and sort apply only to the list below.")
+        with _f2:
+            if st.button("Reset feed view", width="stretch", key="feed_reset_btn"):
+                st.session_state.feed_new_only = False
+                st.session_state.feed_high_only = False
+                st.session_state.feed_search = ""
+                st.session_state.feed_signal_types = list(all_feed_signal_types)
+                st.session_state.feed_sort_primary = "Date detected"
+                st.session_state.feed_sort_secondary = "(none)"
+                st.session_state.feed_sort_order = "Descending"
+                st.rerun()
+
+        _row_a = st.columns((1, 1))
+        with _row_a[0]:
+            st.text_input("Search title / description / implication", key="feed_search", placeholder="Type to filter...")
+        with _row_a[1]:
+            if all_feed_signal_types:
+                st.multiselect("Signal types", options=all_feed_signal_types, key="feed_signal_types")
+
+        _row_b = st.columns((1, 1, 1, 2))
+        with _row_b[0]:
+            st.checkbox("New only", key="feed_new_only")
+        with _row_b[1]:
+            st.checkbox(f"High confidence only (>{HIGH_CONFIDENCE_THRESHOLD})", key="feed_high_only")
+
+        sort_options = _feed_sort_column_options(df.columns)
+        with _row_b[2]:
+            st.selectbox("Sort by", options=sort_options, key="feed_sort_primary")
+        _sec_opts = ["(none)"] + [
+            o for o in sort_options if o != st.session_state.get("feed_sort_primary", "Date detected")
+        ]
+        if st.session_state.get("feed_sort_secondary") not in _sec_opts:
+            st.session_state.feed_sort_secondary = "(none)"
+        with _row_b[3]:
+            _inner = st.columns((1, 1))
+            with _inner[0]:
+                st.selectbox("Then by", options=_sec_opts, key="feed_sort_secondary")
+            with _inner[1]:
+                st.radio("Order", ("Descending", "Ascending"), horizontal=True, key="feed_sort_order")
+
+        df_feed = apply_feed_filters_and_sort(df)
+        n_base = len(df)
+        n_show = len(df_feed)
+        if n_show != n_base or st.session_state.get("feed_search"):
+            st.caption(f"Showing **{n_show}** of **{n_base}** signals in this view.")
+        else:
+            st.caption(f"Showing **{n_show}** signals.")
+
+        if n_show == 0:
+            render_empty_state(
+                "No signals match feed filters",
+                "Try clearing search text or widening event-type selection.",
+                ["Click **Reset feed view** to restore defaults."],
+            )
+        else:
+            for _, row in df_feed.iterrows():
+                render_signal_card(row)
+
+
+# ═══════════════════════════════════════════════════════════════
+# TAB: REVIEW QUEUE
+# ═══════════════════════════════════════════════════════════════
+
+with tab_review:
+    render_section_header(
+        "Analyst workflow",
+        "Review queue",
+        "Confirm, dismiss, or escalate unreviewed signals. "
+        "High-confidence events appear first.",
+    )
+
+    unreviewed = get_unreviewed_events()
+    if not unreviewed:
         render_empty_state(
-            "No data for confidence distribution",
-            "Once the current filters return results, the chart will summarize confidence spread.",
-            ["Adjust filters to restore matching signals."],
-        )
-
-# ───────────────────────────────────────────────────────────────
-# Event feed
-# ───────────────────────────────────────────────────────────────
-
-render_section_header(
-    "Signal feed",
-    "Latest intelligence stories",
-    "Each card highlights the event, source context, and the strategic implication for ABB.",
-)
-
-all_event_types = (
-    sorted(df["event_type"].dropna().unique().tolist())
-    if "event_type" in df.columns and len(df) > 0
-    else []
-)
-if "feed_event_types" not in st.session_state:
-    st.session_state.feed_event_types = list(all_event_types)
-else:
-    # Prune invalid options only; keep [] meaning "all types" for the feed filter.
-    st.session_state.feed_event_types = [
-        x for x in st.session_state.feed_event_types if x in all_event_types
-    ]
-
-if "feed_sort_primary" not in st.session_state:
-    st.session_state.feed_sort_primary = "Date detected"
-if "feed_sort_secondary" not in st.session_state:
-    st.session_state.feed_sort_secondary = "(none)"
-if "feed_sort_order" not in st.session_state:
-    st.session_state.feed_sort_order = "Descending"
-
-st.markdown("**Feed view**")
-_f1, _f2 = st.columns([4, 1])
-with _f1:
-    st.caption("Filter and sort apply only to the list below (charts use the full sidebar filter set).")
-with _f2:
-    if st.button("Reset feed view", use_container_width=True, key="feed_reset_btn"):
-        st.session_state.feed_new_only = False
-        st.session_state.feed_high_only = False
-        st.session_state.feed_search = ""
-        st.session_state.feed_event_types = list(all_event_types)
-        st.session_state.feed_sort_primary = "Date detected"
-        st.session_state.feed_sort_secondary = "(none)"
-        st.session_state.feed_sort_order = "Descending"
-        st.rerun()
-
-_row_a = st.columns((1, 1))
-with _row_a[0]:
-    st.text_input(
-        "Search title / description / implication",
-        key="feed_search",
-        placeholder="Type to filter…",
-    )
-with _row_a[1]:
-    if all_event_types:
-        st.multiselect(
-            "Event types",
-            options=all_event_types,
-            key="feed_event_types",
-            help="Empty selection shows all types.",
+            "Review queue is empty",
+            "All events have been reviewed, or no events exist yet.",
+            ["Run the pipeline to generate new signals.", "Check the Radar tab for the full feed."],
         )
     else:
-        st.caption("No event types in this view.")
+        st.caption(f"**{len(unreviewed)}** events awaiting review")
+        for ev in unreviewed[:25]:
+            with st.container():
+                cols = st.columns([4, 1, 1, 1])
+                with cols[0]:
+                    score = ev.get("confidence_score", 0)
+                    rev_title = html.escape(safe_value(ev.get("title"), "Untitled"))
+                    rev_comp = html.escape(safe_value(ev.get("competitor"), "?"))
+                    rev_sig = html.escape(safe_value(ev.get("signal_type"), "?"))
+                    rev_line = (
+                        f"<strong>{rev_title}</strong> &mdash; "
+                        f"{rev_comp} &middot; {rev_sig} &middot; "
+                        f"conf {score:.2f}"
+                    )
+                    st.markdown(rev_line, unsafe_allow_html=True)
+                    st.caption(html.escape(safe_value(ev.get("strategic_implication"), "")[:200]))
+                eid = ev.get("event_id", "")
+                with cols[1]:
+                    if st.button("Confirm", key=f"confirm_{eid}", width="stretch"):
+                        update_event_review(eid, "confirmed")
+                        save_review(AnalystReview(
+                            review_id=str(uuid.uuid4())[:8],
+                            event_id=eid,
+                            verdict="confirmed",
+                            reviewed_at=pd.Timestamp.now().isoformat(),
+                        ))
+                        st.rerun()
+                with cols[2]:
+                    if st.button("Dismiss", key=f"dismiss_{eid}", width="stretch"):
+                        update_event_review(eid, "dismissed")
+                        save_review(AnalystReview(
+                            review_id=str(uuid.uuid4())[:8],
+                            event_id=eid,
+                            verdict="dismissed",
+                            reviewed_at=pd.Timestamp.now().isoformat(),
+                        ))
+                        st.rerun()
+                with cols[3]:
+                    if st.button("Escalate", key=f"escalate_{eid}", width="stretch"):
+                        update_event_review(eid, "escalated")
+                        save_review(AnalystReview(
+                            review_id=str(uuid.uuid4())[:8],
+                            event_id=eid,
+                            verdict="escalated",
+                            reviewed_at=pd.Timestamp.now().isoformat(),
+                        ))
+                        st.rerun()
+                st.markdown("---")
 
-_row_b = st.columns((1, 1, 1, 2))
-with _row_b[0]:
-    st.checkbox("New only", key="feed_new_only")
-with _row_b[1]:
-    st.checkbox(
-        f"High confidence only (>{HIGH_CONFIDENCE_THRESHOLD})",
-        key="feed_high_only",
+
+# ═══════════════════════════════════════════════════════════════
+# TAB: CORRELATIONS
+# ═══════════════════════════════════════════════════════════════
+
+with tab_correlations:
+    render_section_header(
+        "Cross-signal analysis",
+        "Correlation clusters",
+        "Events that share a strategic theme across competitors or signal types.",
     )
 
-sort_options = _feed_sort_column_options(df.columns)
-with _row_b[2]:
-    st.selectbox("Sort by", options=sort_options, key="feed_sort_primary")
-_sec_opts = ["(none)"] + [
-    o for o in sort_options if o != st.session_state.get("feed_sort_primary", "Date detected")
-]
-if st.session_state.get("feed_sort_secondary") not in _sec_opts:
-    st.session_state.feed_sort_secondary = "(none)"
-with _row_b[3]:
-    _inner = st.columns((1, 1))
-    with _inner[0]:
-        st.selectbox("Then by", options=_sec_opts, key="feed_sort_secondary")
-    with _inner[1]:
-        st.radio(
-            "Order",
-            ("Descending", "Ascending"),
-            horizontal=True,
-            key="feed_sort_order",
+    clusters = get_all_correlations()
+    if not clusters:
+        render_empty_state(
+            "No correlations found yet",
+            "The correlator runs after each pipeline execution. "
+            "Correlations appear when multiple signals converge on a common theme.",
+            [
+                "Run the pipeline with multiple signal types active.",
+                "Correlations require at least 2 events sharing keywords within 14 days.",
+            ],
         )
+    else:
+        for cl in clusters[:20]:
+            with st.container():
+                strength = cl.get("strength", 0)
+                label = html.escape(cl.get("label", "Unknown"))
+                desc = html.escape(cl.get("description", ""))
+                event_ids = cl.get("event_ids", [])
+                competitors = [html.escape(c) for c in cl.get("competitors", [])]
+                signal_types_cl = [html.escape(s) for s in cl.get("signal_types", [])]
 
-df_feed = apply_feed_filters_and_sort(df)
-n_base = len(df)
-n_show = len(df_feed)
-if n_show != n_base or st.session_state.get("feed_search"):
-    st.caption(f"Showing **{n_show}** of **{n_base}** signals in this view.")
-else:
-    st.caption(f"Showing **{n_show}** signals.")
+                cl_meta = (
+                    f"<strong>Strength:</strong> {strength:.2f} &middot; "
+                    f"<strong>Events:</strong> {len(event_ids)} &middot; "
+                    f"<strong>Competitors:</strong> {', '.join(competitors)} &middot; "
+                    f"<strong>Signals:</strong> {', '.join(signal_types_cl)}"
+                )
+                st.markdown(f"### {label}")
+                st.markdown(cl_meta, unsafe_allow_html=True)
+                st.caption(desc)
+                st.markdown("---")
 
-if n_show == 0:
-    render_empty_state(
-        "No signals match feed filters",
-        "Try clearing search text, widening event-type selection, or unchecking the New / High-confidence options.",
-        [
-            "Click **Reset feed view** to restore defaults.",
-            "Adjust sidebar filters if the underlying dataset is empty.",
-        ],
+
+# ═══════════════════════════════════════════════════════════════
+# TAB: OPERATIONS
+# ═══════════════════════════════════════════════════════════════
+
+with tab_ops:
+    render_section_header(
+        "System",
+        "Operations dashboard",
+        "Pipeline runs, alert history, and system health.",
     )
-else:
-    for _, row in df_feed.iterrows():
-        render_signal_card(row)
+
+    runs = get_all_runs()
+    if runs:
+        st.markdown("#### Recent pipeline runs")
+        runs_df = pd.DataFrame(runs[:20])
+        display_cols = [c for c in [
+            "run_id", "started_at", "status", "total_urls",
+            "urls_changed", "events_extracted", "alerts_sent",
+            "correlations_found", "trigger",
+        ] if c in runs_df.columns]
+        st.dataframe(runs_df[display_cols], hide_index=True, width="stretch")
+    else:
+        st.caption("No pipeline runs recorded yet.")
+
+    alerts_data = get_all_alerts()
+    if alerts_data:
+        st.markdown("#### Recent alerts")
+        alerts_df = pd.DataFrame(alerts_data[:20])
+        display_cols = [c for c in [
+            "alert_id", "event_id", "channel", "status", "created_at", "error_detail",
+        ] if c in alerts_df.columns]
+        st.dataframe(alerts_df[display_cols], hide_index=True, width="stretch")
+    else:
+        st.caption("No alerts recorded yet.")
+
+    st.markdown("#### Configuration")
+    st.json({
+        "project": config.project.model_dump(),
+        "alerts": config.alerts.model_dump(),
+        "observability": config.observability.model_dump(),
+        "auth": {"provider": config.auth.provider, "enabled": config.auth.enabled},
+        "budget": config.budget.model_dump(),
+        "retention": config.retention.model_dump(),
+    })

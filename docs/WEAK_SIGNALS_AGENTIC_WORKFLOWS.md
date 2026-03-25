@@ -6,6 +6,13 @@ An **agentic workflow** here means: explicit roles (`Planner`, `Collector`, `Nor
 
 The **current Python prototype** implements a **linear pipeline** (collect → diff → extract → calibrate → persist → dashboard). A full **autonomous tool-calling agent** (dynamic replanning, multi-hop browsing) is a **future** capability aligned with the V3 roadmap.
 
+For concise, standalone signal summaries, see:
+- [`signals/niche_driver_protocol_update_spikes.md`](signals/niche_driver_protocol_update_spikes.md)
+- [`signals/academic_sponsorship_trajectory.md`](signals/academic_sponsorship_trajectory.md)
+- [`signals/patent_citations_outer_industries.md`](signals/patent_citations_outer_industries.md)
+- [`signals/hyperlocal_factory_town_intelligence.md`](signals/hyperlocal_factory_town_intelligence.md)
+- [`signals/developer_api_subdomain_evolution.md`](signals/developer_api_subdomain_evolution.md)
+
 ---
 
 ## Shared orchestration pattern

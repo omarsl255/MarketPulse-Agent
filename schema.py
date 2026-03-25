@@ -1,11 +1,28 @@
 """
-schema.py — Pydantic data models for V2.
-Backward-compatible with V1 CompetitorEvent fields.
+schema.py — Pydantic data models for V3.
+Backward-compatible with V1/V2 CompetitorEvent fields.
+Adds: AlertRecord, RunMetadata, AnalystReview, CorrelationCluster, BudgetLimits.
 """
 
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from enum import Enum
+
+
+class AlertStatus(str, Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    SUPPRESSED = "suppressed"
+    ACKNOWLEDGED = "acknowledged"
+
+
+class ReviewVerdict(str, Enum):
+    UNREVIEWED = "unreviewed"
+    CONFIRMED = "confirmed"
+    DISMISSED = "dismissed"
+    ESCALATED = "escalated"
 
 
 class CompetitorEvent(BaseModel):
@@ -19,11 +36,19 @@ class CompetitorEvent(BaseModel):
     confidence_score: float = Field(description="Confidence in the signal from 0.0 to 1.0")
     source_url: str = Field(description="URL where the signal was detected")
     date_detected: str = Field(description="Date the event was detected in ISO format")
-    # --- V2 additions ---
+    # V2 additions
     run_id: str = Field(default="", description="Pipeline run identifier")
     signal_type: str = Field(default="unknown", description="Signal category (developer_api, github, patent, etc.)")
     content_hash: str = Field(default="", description="SHA-256 hash of the source content")
     is_new: bool = Field(default=True, description="True if this content changed since last run")
+    # V3 additions
+    review_status: str = Field(default="unreviewed", description="Analyst review status")
+    alert_status: str = Field(default="pending", description="Alert delivery status")
+    correlation_id: str = Field(default="", description="ID of the correlation cluster this event belongs to")
+    provenance: str = Field(default="pipeline", description="How this event was created: pipeline, agent, manual")
+    extraction_model: str = Field(default="", description="LLM model used for extraction")
+    extraction_tokens: int = Field(default=0, description="Approximate token count used for extraction")
+    calibration_tokens: int = Field(default=0, description="Approximate token count used for calibration")
 
 
 class ContentSnapshot(BaseModel):
@@ -77,3 +102,69 @@ class FailedExtraction(BaseModel):
         description="HTTP status when fetch failed after a response (if applicable)",
     )
     detail: str = Field(default="", description="Extra technical detail for debugging")
+
+
+# ─── V3 Models ────────────────────────────────────────────────
+
+
+class RunMetadata(BaseModel):
+    """Tracks a single pipeline execution with aggregated stats."""
+    run_id: str = Field(description="Unique run identifier")
+    started_at: str = Field(description="ISO timestamp when the run started")
+    finished_at: str = Field(default="", description="ISO timestamp when the run finished")
+    status: str = Field(default="running", description="running, completed, failed")
+    total_urls: int = Field(default=0)
+    urls_changed: int = Field(default=0)
+    urls_unchanged: int = Field(default=0)
+    urls_failed: int = Field(default=0)
+    events_extracted: int = Field(default=0)
+    extractions_failed: int = Field(default=0)
+    alerts_sent: int = Field(default=0)
+    total_tokens: int = Field(default=0, description="Total LLM tokens consumed in this run")
+    correlations_found: int = Field(default=0)
+    trigger: str = Field(default="manual", description="manual, scheduler, api")
+
+
+class AlertRecord(BaseModel):
+    """Tracks an individual alert delivery attempt."""
+    alert_id: str = Field(description="Unique alert identifier")
+    event_id: str = Field(description="The event that triggered this alert")
+    channel: str = Field(description="Delivery channel: slack, teams, email, log")
+    status: str = Field(default="pending", description="pending, sent, failed, suppressed")
+    created_at: str = Field(description="ISO timestamp when the alert was created")
+    sent_at: str = Field(default="", description="ISO timestamp when delivery succeeded")
+    error_detail: str = Field(default="", description="Error info if delivery failed")
+    run_id: str = Field(default="", description="Pipeline run that created this alert")
+
+
+class AnalystReview(BaseModel):
+    """Records an analyst's assessment of an event."""
+    review_id: str = Field(description="Unique review identifier")
+    event_id: str = Field(description="The event being reviewed")
+    verdict: str = Field(default="unreviewed", description="unreviewed, confirmed, dismissed, escalated")
+    reviewer: str = Field(default="", description="Analyst identifier")
+    notes: str = Field(default="", description="Free-text analyst notes")
+    reviewed_at: str = Field(default="", description="ISO timestamp of the review")
+
+
+class CorrelationCluster(BaseModel):
+    """Groups events that share a strategic signal pattern."""
+    cluster_id: str = Field(description="Unique cluster identifier")
+    label: str = Field(description="Short name for the correlation (e.g., 'Edge AI Push')")
+    description: str = Field(default="", description="What ties these events together")
+    event_ids: List[str] = Field(default_factory=list, description="Event IDs in this cluster")
+    competitors: List[str] = Field(default_factory=list, description="Competitors involved")
+    signal_types: List[str] = Field(default_factory=list, description="Signal types spanned")
+    strength: float = Field(default=0.0, description="Correlation strength 0.0-1.0")
+    created_at: str = Field(default="", description="ISO timestamp")
+    run_id: str = Field(default="", description="Run that created this cluster")
+
+
+class BudgetUsage(BaseModel):
+    """Token and cost tracking for a pipeline run."""
+    run_id: str = Field(description="Pipeline run identifier")
+    competitor: str = Field(default="", description="Competitor scope (empty = global)")
+    stage: str = Field(default="", description="extraction, calibration, correlation, agent")
+    tokens_used: int = Field(default=0)
+    llm_calls: int = Field(default=0)
+    timestamp: str = Field(default="")

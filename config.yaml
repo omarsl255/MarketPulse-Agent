@@ -1,11 +1,11 @@
 # ============================================================
-# Competitor Early-Warning Intelligence Agent — V2 Config
+# Competitor Early-Warning Intelligence Agent — V3 Config
 # ============================================================
 
 project:
   name: RivalSense
-  version: "0.3.0"
-  description: "Multi-competitor intelligence agent for early weak-signal detection."
+  version: "0.4.0"
+  description: "Multi-competitor intelligence agent with alerts, observability, and correlation."
   environment: prototype
 
 perspective:
@@ -32,7 +32,6 @@ competitors:
         - https://developer.siemens.com/apis.html
       github:
         - https://github.com/siemens
-        # Org root is often sparse after HTML stripping; org repo list has more narrative text.
         - https://github.com/orgs/siemens/repositories
       open_source:
         - https://opensource.siemens.com/
@@ -87,6 +86,12 @@ competitors:
         - https://github.com/orgs/RockwellAutomation/repositories
       careers:
         - https://www.rockwellautomation.com/en-us/company/careers.html
+      press:
+        - https://www.rockwellautomation.com/en-us/company/news.html
+      open_source:
+        - https://github.com/orgs/RockwellAutomation/repositories
+      events:
+        - https://www.rockwellautomation.com/en-us/company/events.html
 
 schedule:
   interval_hours: 24
@@ -100,3 +105,40 @@ collector:
   timeout_seconds: 25
   max_retries: 3
   backoff_factor: 2
+
+# ─── V3 sections ───────────────────────────────────────────────
+
+alerts:
+  enabled: false
+  min_confidence: 0.7
+  channels:
+    - log
+  cooldown_minutes: 60
+  max_alerts_per_run: 50
+
+observability:
+  enabled: true
+  provider: log
+  redact_secrets: true
+  redact_raw_text: true
+  max_trace_text_chars: 200
+  environment: dev
+
+budget:
+  max_tokens_per_run: 500000
+  max_tokens_per_competitor: 200000
+  max_llm_calls_per_run: 200
+  max_input_chars: 15000
+
+auth:
+  enabled: false
+  provider: none
+  header_name: X-Forwarded-User
+  allowed_users: []
+
+retention:
+  events_days: 365
+  snapshots_days: 90
+  failed_extractions_days: 30
+  alerts_days: 90
+  runs_days: 90
