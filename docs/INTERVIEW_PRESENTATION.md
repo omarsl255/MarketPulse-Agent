@@ -43,34 +43,7 @@ graph LR
 
 ---
 
-# End-to-End Workflow
 
-The operating flow is designed to maximize signal quality, confidence integrity, and human control.
-
-| Phase | What Happens | Primary Value |
-| --- | --- | --- |
-| Scope | Define competitors, sources, and strategic priorities | Focused collection boundaries |
-| Collect | Crawl and fetch selected public sources on schedule | Continuous market sensing |
-| Filter | Run change detection to suppress unchanged content | High noise reduction |
-| Extract | Convert new evidence into structured event candidates | Standardized findings |
-| Calibrate | Apply confidence calibration on extracted claims | More reliable prioritization |
-| Correlate | Link events across firms and source types | Theme and pattern discovery |
-| Review | Analyst confirms, dismisses, or escalates | Human accountability |
-| Learn | Feed decision outcomes back into tuning | Continuous improvement loop |
-
-```mermaid
-flowchart LR
-    A[Scope] --> B[Collect]
-    B --> C[Filter]
-    C --> D[Extract]
-    D --> E[Calibrate]
-    E --> F[Correlate]
-    F --> G[Analyst Review]
-    G --> H[Feedback and Tuning]
-    H --> A
-```
-
----
 
 # Five Strategic Weak-Signal Families
 
