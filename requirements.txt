@@ -5,3 +5,8 @@ beautifulsoup4
 requests
 sqlite-utils
 langchain_google_genai
+pyyaml
+apscheduler
+pytest
+altair
+python-dotenv

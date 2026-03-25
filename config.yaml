@@ -1,0 +1,102 @@
+# ============================================================
+# Competitor Early-Warning Intelligence Agent — V2 Config
+# ============================================================
+
+project:
+  name: RivalSense
+  version: "0.3.0"
+  description: "Multi-competitor intelligence agent for early weak-signal detection."
+  environment: prototype
+
+perspective:
+  employer: ABB
+  objective: >
+    Monitor competitors from an outside-in perspective and detect early
+    strategic signals from public web data before they appear in formal
+    announcements or business reports.
+
+competitors:
+  - name: Siemens
+    tier: 1
+    focus_areas:
+      - industrial automation
+      - industrial software
+      - AI
+      - developer ecosystem
+      - industrial edge
+    urls:
+      corporate:
+        - https://www.siemens.com/
+      developer_api:
+        - https://developer.siemens.com/
+        - https://developer.siemens.com/apis.html
+      github:
+        - https://github.com/siemens
+        # Org root is often sparse after HTML stripping; org repo list has more narrative text.
+        - https://github.com/orgs/siemens/repositories
+      open_source:
+        - https://opensource.siemens.com/
+      careers:
+        - https://jobs.siemens.com/
+        - https://jobs.sw.siemens.com/
+      press:
+        - https://press.siemens.com/
+      events:
+        - https://www.siemens.com/global/en/company/fairs-events.html
+
+  - name: Schneider Electric
+    tier: 1
+    focus_areas:
+      - energy management
+      - industrial automation
+      - software
+      - digital services
+      - open source
+    urls:
+      corporate:
+        - https://www.se.com/
+      developer_api:
+        - https://developer.se.com/
+      github:
+        - https://github.com/schneider-electric
+        - https://github.com/orgs/schneider-electric/repositories
+      open_source:
+        - https://www.se.com/ww/en/about-us/open-source/projects/
+      careers:
+        - https://careers.se.com/
+      press:
+        - https://www.se.com/ww/en/about-us/newsroom/
+      events:
+        - https://www.se.com/ww/en/work/campaign/life-is-on/
+
+  - name: Rockwell Automation
+    tier: 1
+    focus_areas:
+      - factory automation
+      - industrial software
+      - control systems
+      - partner ecosystem
+    urls:
+      corporate:
+        - https://www.rockwellautomation.com/
+      developer_api:
+        - https://developer.rockwellautomation.com/
+      github:
+        - https://github.com/RockwellAutomation
+        - https://github.com/Rockwell-Automation-Inc
+        - https://github.com/orgs/RockwellAutomation/repositories
+      careers:
+        - https://www.rockwellautomation.com/en-us/company/careers.html
+
+schedule:
+  interval_hours: 24
+
+llm:
+  model: gemini-2.5-flash
+  temperature: 0
+  max_input_chars: 15000
+
+collector:
+  timeout_seconds: 25
+  max_retries: 3
+  backoff_factor: 2
