@@ -69,63 +69,7 @@ timeline
 
 ---
 
-# Deep Dive: Developer API and Subdomain Evolution
 
-| Dimension | Detail |
-| --- | --- |
-| Horizon | 3 to 6 months ahead |
-| Source cluster | Developer portals, API catalogs, CT logs |
-| Detection logic | Track new SDK references, auth model changes, endpoint launches, and deprecation trajectories |
-| Strategic interpretation | Indicates partner ecosystem expansion, platform hardening, or integration push before formal launch messaging |
-| ABB impact | Enables earlier partner strategy adjustments and migration planning windows |
-
-```text
-Illustrative Funnel
-
-Raw surface deltas -> Relevant API events -> Cross-source corroboration -> Analyst action queue
-      100%                  ~30-40%                  ~10-15%                  prioritized set
-```
-
----
-
-# Deep Dive: Niche Driver and Protocol Updates
-
-| Dimension | Detail |
-| --- | --- |
-| Horizon | 6 to 12 months ahead |
-| Source cluster | GitHub repositories, protocol forums, maintainer discussions |
-| Detection logic | Observe commit velocity, adapter changes, protocol-specific issue patterns, and maintainer alignment |
-| Strategic interpretation | Captures bottom-up ecosystem migration signals (for example, protocol standard consolidation) |
-| ABB impact | Better timing for integration backlog shifts, partner outreach, and interoperability planning |
-
-```mermaid
-graph TD
-    A[Repo and Forum Activity] --> B[Protocol Shift Detection]
-    B --> C[Momentum and Consistency Scoring]
-    C --> D[Ecosystem Move Hypothesis]
-    D --> E[Analyst Validation]
-```
-
----
-
-# Deep Dive: Hyper-Local Factory-Town Intelligence
-
-| Dimension | Detail |
-| --- | --- |
-| Horizon | 3 to 12 months ahead |
-| Source cluster | Municipal permits, zoning agendas, local German reporting, regional logistics notices |
-| Detection logic | Extract facility expansion references, zoning amendments, equipment permits, and site-level logistics signals |
-| Strategic interpretation | Reveals capacity and operational readiness before national-level communications |
-| ABB impact | Provides earlier regional response planning for sales coverage and supply-chain readiness |
-
-```text
-Lead-Time Sequence
-
-Local permit/zoning signal -> Site preparation and staffing -> National media / formal announcement
-         early                     mid-stage evidence                     late confirmation
-```
-
----
 
 # Quality, Governance, and Risk Control
 
